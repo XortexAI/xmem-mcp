@@ -15,13 +15,10 @@ from __future__ import annotations
 
 import asyncio
 import os
-from contextlib import asynccontextmanager
-from collections.abc import AsyncIterator
-from dataclasses import dataclass
 
 import httpx
 from dotenv import load_dotenv
-from mcp.server.fastmcp import FastMCP, Context
+from mcp.server.fastmcp import FastMCP
 
 load_dotenv()
 
@@ -30,48 +27,32 @@ XMEM_API_KEY = os.getenv("XMEM_API_KEY", "")
 DEFAULT_USER_ID = os.getenv("DEFAULT_USER_ID", "mcp_user")
 
 
-@dataclass
-class XMemContext:
-    """Shared context carrying the httpx client for the XMem API."""
-    client: httpx.AsyncClient
+_http_client: httpx.AsyncClient | None = None
 
 
-@asynccontextmanager
-async def xmem_lifespan(server: FastMCP) -> AsyncIterator[XMemContext]:
-    headers = {"Content-Type": "application/json"}
-    if XMEM_API_KEY:
-        headers["Authorization"] = f"Bearer {XMEM_API_KEY}"
-
-    async with httpx.AsyncClient(
-        base_url=XMEM_API_URL, headers=headers, timeout=120,
-    ) as client:
-        resp = await client.get("/health")
-        data = resp.json()
-        if data.get("status") != "ready":
-            print(f"[xmem-mcp] Warning: XMem API not ready — {data}")
-        else:
-            print("[xmem-mcp] Connected to XMem API.")
-        yield XMemContext(client=client)
-
-    print("[xmem-mcp] Shut down.")
+def _get_client() -> httpx.AsyncClient:
+    """Get the global HTTP client, creating it if needed."""
+    global _http_client
+    if _http_client is None:
+        headers = {"Content-Type": "application/json"}
+        if XMEM_API_KEY:
+            headers["Authorization"] = f"Bearer {XMEM_API_KEY}"
+        _http_client = httpx.AsyncClient(
+            base_url=XMEM_API_URL, headers=headers, timeout=120,
+        )
+    return _http_client
 
 
 mcp = FastMCP(
     "xmem-mcp",
     description="MCP server for long-term memory storage and retrieval with XMem",
-    lifespan=xmem_lifespan,
     host=os.getenv("HOST", "0.0.0.0"),
     port=int(os.getenv("PORT", "8050")),
 )
 
 
-def _client(ctx: Context) -> httpx.AsyncClient:
-    return ctx.request_context.lifespan_context.client
-
-
 @mcp.tool()
 async def save_memory(
-    ctx: Context,
     text: str,
     user_id: str = "",
     agent_response: str = "",
@@ -83,12 +64,11 @@ async def save_memory(
     and summaries.
 
     Args:
-        ctx:  MCP server context
         text: The user message / information to memorize
         user_id: User identifier (defaults to server-configured default)
         agent_response: Optional assistant reply for richer summary extraction
     """
-    client = _client(ctx)
+    client = _get_client()
     uid = user_id or DEFAULT_USER_ID
 
     try:
@@ -125,7 +105,6 @@ async def save_memory(
 
 @mcp.tool()
 async def search_memories(
-    ctx: Context,
     query: str,
     user_id: str = "",
     top_k: int = 10,
@@ -137,13 +116,12 @@ async def search_memories(
     without generating an LLM answer.
 
     Args:
-        ctx:     MCP server context
         query:   Natural-language search query
         user_id: User identifier
         top_k:   Maximum results per domain
         domains: Comma-separated list of domains to search (profile, temporal, summary)
     """
-    client = _client(ctx)
+    client = _get_client()
     uid = user_id or DEFAULT_USER_ID
     domain_list = [d.strip() for d in domains.split(",") if d.strip()]
 
@@ -178,7 +156,6 @@ async def search_memories(
 
 @mcp.tool()
 async def retrieve_answer(
-    ctx: Context,
     query: str,
     user_id: str = "",
     top_k: int = 5,
@@ -189,12 +166,11 @@ async def retrieve_answer(
     in the user's stored knowledge.
 
     Args:
-        ctx:     MCP server context
         query:   The question to answer
         user_id: User identifier
         top_k:   Number of source records to consider
     """
-    client = _client(ctx)
+    client = _get_client()
     uid = user_id or DEFAULT_USER_ID
 
     try:
