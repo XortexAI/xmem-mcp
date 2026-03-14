@@ -43,7 +43,7 @@ Your AI agent calls XMem MCP tools like any other MCP tool. The server translate
 
 The server exposes three tools to the connected agent:
 
-### $\color{#4285F4}{\textsf{save\_memory}}$
+### `save_memory`
 
 Ingest a conversation turn into long-term memory. XMem automatically classifies the input and extracts profile facts, temporal events, and summaries.
 
@@ -53,7 +53,7 @@ Ingest a conversation turn into long-term memory. XMem automatically classifies 
 | `user_id` | No | User identifier (falls back to `DEFAULT_USER_ID`) |
 | `agent_response` | No | Assistant reply — enables richer summary extraction |
 
-### $\color{#34A853}{\textsf{search\_memories}}$
+### `search_memories`
 
 Semantic search across memory domains. Returns raw matching records without generating an LLM answer.
 
@@ -64,7 +64,7 @@ Semantic search across memory domains. Returns raw matching records without gene
 | `top_k` | No | `10` | Max results per domain |
 | `domains` | No | `profile,temporal,summary` | Comma-separated domains to search |
 
-### $\color{#EA4335}{\textsf{retrieve\_answer}}$
+### `retrieve_answer`
 
 Answer a question using stored memories. Retrieves relevant context and generates an LLM-grounded answer with source citations.
 
@@ -156,7 +156,7 @@ PORT=8050
 
 ## Client integration
 
-### $\color{#4285F4}{\textsf{Cursor}}$
+### Cursor
 
 Add to `.cursor/mcp.json`:
 
@@ -171,7 +171,7 @@ Add to `.cursor/mcp.json`:
 }
 ```
 
-### $\color{#34A853}{\textsf{Windsurf (SSE)}}$
+### Windsurf (SSE)
 
 ```json
 {
@@ -184,7 +184,7 @@ Add to `.cursor/mcp.json`:
 }
 ```
 
-### $\color{#A259FF}{\textsf{Claude Desktop / Windsurf (stdio)}}$
+### Claude Desktop / Windsurf (stdio)
 
 ```json
 {
@@ -202,7 +202,7 @@ Add to `.cursor/mcp.json`:
 }
 ```
 
-### $\color{#EA4335}{\textsf{Docker (stdio)}}$
+### Docker (stdio)
 
 ```json
 {
