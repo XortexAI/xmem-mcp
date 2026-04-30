@@ -1,14 +1,20 @@
 """
-XMem MCP Server — exposes XMem memory operations as MCP tools.
+XMem MCP Server — exposes XMem memory + scanner + code operations as MCP tools.
 
 Uses the XMem REST API (src/api) as its backend.
 Configure XMEM_API_URL and (optionally) XMEM_API_KEY
 in the environment or .env file.
 
 Tools exposed:
-    save_memory      — ingest a conversation turn into long-term memory
-    search_memories  — semantic search across all memory domains
-    retrieve_answer  — get an LLM-generated answer backed by stored memories
+    Memory:
+      save_memory        — ingest a conversation turn into long-term memory
+    Code Intelligence (11 native tools, e.g.):
+      search_symbols       — semantic search across functions/classes
+      impact_analysis      — see callers/callees of a symbol
+      read_symbol_code     — get raw code for a function/class
+      get_directory_summary— see what a folder does
+      list_indexed_repos   — list repos you have scanned
+      browse_community_catalog — browse publicly shared code indexes
 """
 
 from __future__ import annotations
@@ -19,6 +25,8 @@ import os
 import httpx
 from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
+
+from scanner_tools import register_scanner_tools
 
 load_dotenv()
 
@@ -45,10 +53,20 @@ def _get_client() -> httpx.AsyncClient:
 
 mcp = FastMCP(
     "xmem-mcp",
-    description="MCP server for long-term memory storage and retrieval with XMem",
+    description=(
+        "MCP server for long-term memory storage, retrieval, "
+        "and code intelligence with XMem. Provides memory tools "
+        "(save, search, retrieve) and native code retrieval tools "
+        "(search_symbols, impact_analysis, read_file_code, etc)."
+    ),
     host=os.getenv("HOST", "0.0.0.0"),
     port=int(os.getenv("PORT", "8050")),
 )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Memory Tools (existing)
+# ═══════════════════════════════════════════════════════════════════════════
 
 
 @mcp.tool()
@@ -201,6 +219,18 @@ async def retrieve_answer(
         return f"API error ({exc.response.status_code}): {exc.response.text[:200]}"
     except Exception as exc:
         return f"Error retrieving answer: {exc}"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Code Intelligence Tools
+# ═══════════════════════════════════════════════════════════════════════════
+
+register_scanner_tools(mcp, _get_client, DEFAULT_USER_ID)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Entry point
+# ═══════════════════════════════════════════════════════════════════════════
 
 
 async def main():

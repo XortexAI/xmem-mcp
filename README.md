@@ -2,77 +2,66 @@
 
 # XMem MCP
 
-**Long-term memory for AI agents.**
+**Long-term memory + code intelligence for AI agents.**
 
 [![Python 3.11+](https://img.shields.io/badge/Python-3.11+-3776AB?style=flat-square&logo=python&logoColor=white)](https://python.org)
 [![MCP](https://img.shields.io/badge/MCP-Compatible-34A853?style=flat-square)](https://modelcontextprotocol.io)
 [![License: MIT](https://img.shields.io/badge/License-MIT-A259FF?style=flat-square)](LICENSE)
 [![Docker](https://img.shields.io/badge/Docker-Ready-2496ED?style=flat-square&logo=docker&logoColor=white)](https://docker.com)
 
-A [Model Context Protocol](https://modelcontextprotocol.io) server that gives any MCP-compatible AI agent persistent long-term memory, powered by the XMem API. Connect it to Cursor, Claude Desktop, Windsurf, n8n, or any MCP client.
+A [Model Context Protocol](https://modelcontextprotocol.io) server that gives any MCP-compatible AI agent persistent long-term memory **and** code intelligence, powered by the XMem API. Connect it to Cursor, Claude Desktop, Windsurf, ChatGPT, n8n, or any MCP client.
 
 ---
 
 </div>
 
-## See it in action
-
-https://github.com/user-attachments/assets/60a1d5c3-2efe-4ef1-abb3-e334f5cc5fb7
-
----
-
 ## How it works
 
 ```
-MCP Client (Cursor / Claude Desktop / Windsurf / n8n)
+MCP Client (Cursor / Claude Desktop / Windsurf / ChatGPT / n8n)
       |
       |  MCP protocol (SSE or stdio)
       v
   xmem-mcp            HTTP / Bearer auth
-  (this repo)  ------------------------------>  XMem API
-                                                  |-- POST /v1/memory/ingest
-                                                  |-- POST /v1/memory/search
-                                                  '-- POST /v1/memory/retrieve
+  (this repo)  -------------------------------->  XMem API
+                                                    |-- POST /v1/memory/ingest
+                                                    |-- POST /v1/memory/search
+                                                    |-- POST /v1/memory/retrieve
+                                                    |-- GET  /v1/code/*
+                                                    '-- POST /v1/code/query
 ```
-
-Your AI agent calls XMem MCP tools like any other MCP tool. The server translates those calls into XMem API requests and returns structured results the agent can reason over.
 
 ---
 
 ## Tools
 
-The server exposes three tools to the connected agent:
+### Memory Tools
 
-### `save_memory`
+| Tool | Description |
+|------|-------------|
+| `save_memory` | Ingest a conversation turn into long-term memory |
+| `search_memories` | Semantic search across memory domains |
+| `retrieve_answer` | LLM-generated answer backed by stored memories |
 
-Ingest a conversation turn into long-term memory. XMem automatically classifies the input and extracts profile facts, temporal events, and summaries.
+### Code Intelligence Tools (Native)
 
-| Parameter | Required | Description |
-|-----------|----------|-------------|
-| `text` | Yes | The user message or information to memorize |
-| `user_id` | No | User identifier (falls back to `DEFAULT_USER_ID`) |
-| `agent_response` | No | Assistant reply — enables richer summary extraction |
+These tools run directly against the Neo4j CodeStore to allow the MCP Client to autonomously navigate the codebase.
 
-### `search_memories`
-
-Semantic search across memory domains. Returns raw matching records without generating an LLM answer.
-
-| Parameter | Required | Default | Description |
-|-----------|----------|---------|-------------|
-| `query` | Yes | -- | Natural-language search query |
-| `user_id` | No | `DEFAULT_USER_ID` | User identifier |
-| `top_k` | No | `10` | Max results per domain |
-| `domains` | No | `profile,temporal,summary` | Comma-separated domains to search |
-
-### `retrieve_answer`
-
-Answer a question using stored memories. Retrieves relevant context and generates an LLM-grounded answer with source citations.
-
-| Parameter | Required | Default | Description |
-|-----------|----------|---------|-------------|
-| `query` | Yes | -- | The question to answer |
-| `user_id` | No | `DEFAULT_USER_ID` | User identifier |
-| `top_k` | No | `5` | Number of source records to consider |
+| Tool | Description |
+|------|-------------|
+| `search_symbols` | Hybrid search across functions, classes, and methods |
+| `search_files` | Search for files by their semantic summary |
+| `search_annotations` | Search team annotations, bug reports, and design decisions |
+| `impact_analysis` | Graph traversal showing callers, callees, and inheritance |
+| `get_file_context` | Get the structural context of a file (defined symbols and imports) |
+| `read_symbol_code` | Read the EXACT raw source code of a specific function or class |
+| `read_file_code` | Read the ENTIRE raw source code of a specific file |
+| `search_snippets` | Search the user's personal saved code snippets |
+| `get_repo_structure` | Get a list of all directories in the repository |
+| `get_directory_summary` | Get the semantic summary of a directory |
+| `get_file_summary` | Get the semantic summary of a file |
+| `list_indexed_repos` | List all repositories scanned by you |
+| `browse_community_catalog` | Browse publicly shared code indexes |
 
 ---
 
@@ -82,12 +71,6 @@ Answer a question using stored memories. Retrieves relevant context and generate
 
 - Python 3.11+
 - A running XMem API instance (default: `http://localhost:8000`)
-
-Start the XMem API first:
-
-```bash
-uvicorn src.api.app:create_app --factory --host 0.0.0.0 --port 8000
-```
 
 ### Install
 
@@ -104,12 +87,6 @@ uv pip install -e .
 pip install -e .
 ```
 
-**Docker**
-
-```bash
-docker build -t xmem-mcp --build-arg PORT=8050 .
-```
-
 ### Run
 
 **SSE transport (default)**
@@ -120,37 +97,20 @@ uv run src/main.py
 python src/main.py
 ```
 
-**Docker**
-
-```bash
-docker run --env-file .env -p 8050:8050 xmem-mcp
-```
-
 ---
 
 ## Configuration
 
-Create a `.env` file in the project root (or set environment variables):
+Create a `.env` file in the project root:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `XMEM_API_URL` | `http://localhost:8000` | Base URL of the XMem API |
 | `XMEM_API_KEY` | _(empty)_ | Bearer token for XMem API authentication |
-| `DEFAULT_USER_ID` | `mcp_user` | Default user ID when none is provided by the caller |
+| `DEFAULT_USER_ID` | `mcp_user` | Default user ID when none is provided |
 | `TRANSPORT` | `sse` | MCP transport protocol (`sse` or `stdio`) |
 | `HOST` | `0.0.0.0` | Bind address (SSE transport only) |
 | `PORT` | `8050` | Listen port (SSE transport only) |
-
-Example `.env`:
-
-```env
-XMEM_API_URL=http://localhost:8000
-XMEM_API_KEY=your-api-key-here
-DEFAULT_USER_ID=mcp_user
-TRANSPORT=sse
-HOST=0.0.0.0
-PORT=8050
-```
 
 ---
 
@@ -166,19 +126,6 @@ Add to `.cursor/mcp.json`:
     "xmem": {
       "transport": "sse",
       "url": "http://localhost:8050/sse"
-    }
-  }
-}
-```
-
-### Windsurf (SSE)
-
-```json
-{
-  "mcpServers": {
-    "xmem": {
-      "transport": "sse",
-      "serverUrl": "http://localhost:8050/sse"
     }
   }
 }
@@ -202,32 +149,6 @@ Add to `.cursor/mcp.json`:
 }
 ```
 
-### Docker (stdio)
-
-```json
-{
-  "mcpServers": {
-    "xmem": {
-      "command": "docker",
-      "args": ["run", "--rm", "-i",
-               "-e", "TRANSPORT",
-               "-e", "XMEM_API_URL",
-               "-e", "XMEM_API_KEY",
-               "xmem-mcp"],
-      "env": {
-        "TRANSPORT": "stdio",
-        "XMEM_API_URL": "http://host.docker.internal:8000",
-        "XMEM_API_KEY": "YOUR-API-KEY"
-      }
-    }
-  }
-}
-```
-
-> **Docker users**: Use `host.docker.internal` instead of `localhost` when the XMem API runs on the host machine outside Docker.
-
-Update the port in all examples if you changed it from the default `8050`.
-
 ---
 
 ## Architecture
@@ -235,20 +156,13 @@ Update the port in all examples if you changed it from the default `8050`.
 ```
 xmem-mcp/
   src/
-    main.py       MCP server — tool definitions, HTTP client, transport setup
-    utils.py      Helpers — user ID derivation, env readers
-  .env.example    Environment variable template
-  Dockerfile      Container build
-  pyproject.toml  Project metadata and dependencies
+    main.py            MCP server — memory tools, transport setup
+    scanner_tools.py   Code intelligence tool definitions
+    utils.py           Helpers — user ID derivation, env readers
+  .env.example         Environment variable template
+  Dockerfile           Container build
+  pyproject.toml       Project metadata and dependencies
 ```
-
-### Key internals
-
-- **Async throughout** — `httpx.AsyncClient` with 120s timeout for all XMem API calls
-- **Bearer auth** — Automatically attaches `Authorization` header when `XMEM_API_KEY` is set
-- **Dual transport** — SSE for HTTP-based clients, stdio for local process execution
-- **Error handling** — HTTP and runtime errors return user-friendly messages (truncated to 200 chars)
-- **Domain-aware** — Three memory domains (`profile`, `temporal`, `summary`) with per-domain confidence scoring
 
 ---
 
