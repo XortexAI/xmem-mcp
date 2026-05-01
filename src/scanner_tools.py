@@ -17,11 +17,22 @@ def register_scanner_tools(
     mcp: FastMCP,
     get_client: callable,
     default_user_id: str,
+    check_auth: callable | None = None,
 ) -> None:
     """Register all 11 granular code query tools on the given MCP server."""
 
+    def _auth_error() -> str | None:
+        """Check auth if provided, otherwise allow (for backward compatibility)."""
+        if check_auth:
+            return check_auth()
+        return None
+
     async def _execute(org_id: str, repo: str, tool_name: str, tool_args: dict, user_id: str) -> str:
         """Helper to invoke the backend POST /v1/code/execute-tool."""
+        # Check authentication first
+        if auth_err := _auth_error():
+            return auth_err
+
         client = get_client()
         uid = user_id or default_user_id
         try:
@@ -54,8 +65,10 @@ def register_scanner_tools(
             
         except httpx.HTTPStatusError as exc:
             return f"API error ({exc.response.status_code}): {exc.response.text[:200]}"
-        except Exception as exc:
-            return f"Error executing tool {tool_name}: {exc}"
+        except httpx.RequestError as exc:
+            return f"Network error connecting to XMem API: {exc}"
+        except httpx.TimeoutException as exc:
+            return f"Request timed out: {exc}"
 
     # ── 1. search_symbols ──────────────────────────────────────────────
     @mcp.tool()
@@ -187,6 +200,10 @@ def register_scanner_tools(
         user_id: str = "",
     ) -> str:
         """List all repositories scanned by you."""
+        # Check authentication
+        if auth_err := _auth_error():
+            return auth_err
+
         client = get_client()
         uid = user_id or default_user_id
         try:
@@ -204,8 +221,10 @@ def register_scanner_tools(
             return "\n".join(lines)
         except httpx.HTTPStatusError as exc:
             return f"API error ({exc.response.status_code}): {exc.response.text[:200]}"
-        except Exception as exc:
-            return f"Error listing indexed repos: {exc}"
+        except httpx.RequestError as exc:
+            return f"Network error connecting to XMem API: {exc}"
+        except httpx.TimeoutException as exc:
+            return f"Request timed out: {exc}"
 
     # ── Extra: browse_community_catalog ────────────────────────────────
     @mcp.tool()
@@ -215,6 +234,10 @@ def register_scanner_tools(
         user_id: str = "",
     ) -> str:
         """Browse publicly shared code indexes from the community catalog."""
+        # Check authentication
+        if auth_err := _auth_error():
+            return auth_err
+
         client = get_client()
         uid = user_id or default_user_id
         try:
@@ -237,5 +260,7 @@ def register_scanner_tools(
             return "\n".join(lines)
         except httpx.HTTPStatusError as exc:
             return f"API error ({exc.response.status_code}): {exc.response.text[:200]}"
-        except Exception as exc:
-            return f"Error browsing catalog: {exc}"
+        except httpx.RequestError as exc:
+            return f"Network error connecting to XMem API: {exc}"
+        except httpx.TimeoutException as exc:
+            return f"Request timed out: {exc}"
