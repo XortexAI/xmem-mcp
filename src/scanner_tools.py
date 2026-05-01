@@ -16,21 +16,29 @@ from mcp.server.fastmcp import FastMCP
 def register_scanner_tools(
     mcp: FastMCP,
     get_client: callable,
-    default_user_id: str,
+    check_auth: callable | None = None,
 ) -> None:
     """Register all 11 granular code query tools on the given MCP server."""
 
-    async def _execute(org_id: str, repo: str, tool_name: str, tool_args: dict, user_id: str) -> str:
+    def _auth_error() -> str | None:
+        """Check auth if provided, otherwise allow (for backward compatibility)."""
+        if check_auth:
+            return check_auth()
+        return None
+
+    async def _execute(org_id: str, repo: str, tool_name: str, tool_args: dict) -> str:
         """Helper to invoke the backend POST /v1/code/execute-tool."""
+        # Check authentication first
+        if auth_err := _auth_error():
+            return auth_err
+
         client = get_client()
-        uid = user_id or default_user_id
         try:
             resp = await client.post("/v1/code/execute-tool", json={
                 "org_id": org_id,
                 "repo": repo,
                 "tool_name": tool_name,
                 "tool_args": tool_args,
-                "user_id": uid,
             })
             if resp.status_code == 403:
                 body = resp.json()
@@ -54,8 +62,10 @@ def register_scanner_tools(
             
         except httpx.HTTPStatusError as exc:
             return f"API error ({exc.response.status_code}): {exc.response.text[:200]}"
-        except Exception as exc:
-            return f"Error executing tool {tool_name}: {exc}"
+        except httpx.RequestError as exc:
+            return f"Network error connecting to XMem API: {exc}"
+        except httpx.TimeoutException as exc:
+            return f"Request timed out: {exc}"
 
     # ── 1. search_symbols ──────────────────────────────────────────────
     @mcp.tool()
@@ -63,11 +73,10 @@ def register_scanner_tools(
         org_id: str,
         repo: str,
         query: str,
-        user_id: str = "",
     ) -> str:
         """Hybrid search across functions/classes/methods by semantic meaning or exact name.
         Uses graph-conditioned retrieval (combines vector similarity, BM25, and call graph signals)."""
-        return await _execute(org_id, repo, "search_symbols", {"query": query}, user_id)
+        return await _execute(org_id, repo, "search_symbols", {"query": query})
 
     # ── 2. search_files ────────────────────────────────────────────────
     @mcp.tool()
@@ -75,10 +84,9 @@ def register_scanner_tools(
         org_id: str,
         repo: str,
         query: str,
-        user_id: str = "",
     ) -> str:
         """Search for files by their semantic summary and overall purpose."""
-        return await _execute(org_id, repo, "search_files", {"query": query}, user_id)
+        return await _execute(org_id, repo, "search_files", {"query": query})
 
     # ── 3. search_annotations ──────────────────────────────────────────
     @mcp.tool()
@@ -86,10 +94,9 @@ def register_scanner_tools(
         org_id: str,
         repo: str,
         query: str,
-        user_id: str = "",
     ) -> str:
         """Search team annotations: bug reports, design decisions, warnings attached to code."""
-        return await _execute(org_id, repo, "search_annotations", {"query": query}, user_id)
+        return await _execute(org_id, repo, "search_annotations", {"query": query})
 
     # ── 4. impact_analysis ─────────────────────────────────────────────
     @mcp.tool()
@@ -98,11 +105,10 @@ def register_scanner_tools(
         repo: str,
         symbol_name: str,
         depth: int = 2,
-        user_id: str = "",
     ) -> str:
         """Graph traversal showing callers, callees, and inheritance for a specific symbol.
         Crucial for answering 'what breaks if I change X?'"""
-        return await _execute(org_id, repo, "impact_analysis", {"symbol_name": symbol_name, "depth": depth}, user_id)
+        return await _execute(org_id, repo, "impact_analysis", {"symbol_name": symbol_name, "depth": depth})
 
     # ── 5. get_file_context ────────────────────────────────────────────
     @mcp.tool()
@@ -110,10 +116,9 @@ def register_scanner_tools(
         org_id: str,
         repo: str,
         file_path: str,
-        user_id: str = "",
     ) -> str:
         """Get the structural context of a file: what symbols it defines and what it imports."""
-        return await _execute(org_id, repo, "get_file_context", {"file_path": file_path}, user_id)
+        return await _execute(org_id, repo, "get_file_context", {"file_path": file_path})
 
     # ── 6. read_symbol_code ────────────────────────────────────────────
     @mcp.tool()
@@ -122,10 +127,9 @@ def register_scanner_tools(
         repo: str,
         symbol_name: str,
         file_path: str,
-        user_id: str = "",
     ) -> str:
         """Read the EXACT raw source code of a specific function, method, or class."""
-        return await _execute(org_id, repo, "read_symbol_code", {"symbol_name": symbol_name, "file_path": file_path}, user_id)
+        return await _execute(org_id, repo, "read_symbol_code", {"symbol_name": symbol_name, "file_path": file_path})
 
     # ── 7. read_file_code ──────────────────────────────────────────────
     @mcp.tool()
@@ -133,10 +137,9 @@ def register_scanner_tools(
         org_id: str,
         repo: str,
         file_path: str,
-        user_id: str = "",
     ) -> str:
         """Read the ENTIRE raw source code of a specific file."""
-        return await _execute(org_id, repo, "read_file_code", {"file_path": file_path}, user_id)
+        return await _execute(org_id, repo, "read_file_code", {"file_path": file_path})
 
     # ── 8. search_snippets ─────────────────────────────────────────────
     @mcp.tool()
@@ -144,20 +147,18 @@ def register_scanner_tools(
         org_id: str,
         repo: str,
         query: str,
-        user_id: str = "",
     ) -> str:
         """Search the user's personal saved code snippets."""
-        return await _execute(org_id, repo, "search_snippets", {"query": query}, user_id)
+        return await _execute(org_id, repo, "search_snippets", {"query": query})
 
     # ── 9. get_repo_structure ──────────────────────────────────────────
     @mcp.tool()
     async def get_repo_structure(
         org_id: str,
         repo: str,
-        user_id: str = "",
     ) -> str:
         """Get a list of all directories in the repository along with their file counts and summaries."""
-        return await _execute(org_id, repo, "get_repo_structure", {}, user_id)
+        return await _execute(org_id, repo, "get_repo_structure", {})
 
     # ── 10. get_directory_summary ──────────────────────────────────────
     @mcp.tool()
@@ -165,10 +166,9 @@ def register_scanner_tools(
         org_id: str,
         repo: str,
         dir_path: str,
-        user_id: str = "",
     ) -> str:
         """Get the semantic summary of what a specific directory does and lists its files."""
-        return await _execute(org_id, repo, "get_directory_summary", {"dir_path": dir_path}, user_id)
+        return await _execute(org_id, repo, "get_directory_summary", {"dir_path": dir_path})
 
     # ── 11. get_file_summary ───────────────────────────────────────────
     @mcp.tool()
@@ -176,21 +176,21 @@ def register_scanner_tools(
         org_id: str,
         repo: str,
         file_path: str,
-        user_id: str = "",
     ) -> str:
         """Get the semantic summary outlining what a specific file is responsible for."""
-        return await _execute(org_id, repo, "get_file_summary", {"file_path": file_path}, user_id)
+        return await _execute(org_id, repo, "get_file_summary", {"file_path": file_path})
 
     # ── Extra: list_indexed_repos ──────────────────────────────────────
     @mcp.tool()
-    async def list_indexed_repos(
-        user_id: str = "",
-    ) -> str:
+    async def list_indexed_repos() -> str:
         """List all repositories scanned by you."""
+        # Check authentication
+        if auth_err := _auth_error():
+            return auth_err
+
         client = get_client()
-        uid = user_id or default_user_id
         try:
-            resp = await client.get("/v1/scanner/repos", params={"username": uid})
+            resp = await client.get("/v1/scanner/repos")
             resp.raise_for_status()
             body = resp.json()
             if body.get("status") == "error":
@@ -204,22 +204,25 @@ def register_scanner_tools(
             return "\n".join(lines)
         except httpx.HTTPStatusError as exc:
             return f"API error ({exc.response.status_code}): {exc.response.text[:200]}"
-        except Exception as exc:
-            return f"Error listing indexed repos: {exc}"
+        except httpx.RequestError as exc:
+            return f"Network error connecting to XMem API: {exc}"
+        except httpx.TimeoutException as exc:
+            return f"Request timed out: {exc}"
 
     # ── Extra: browse_community_catalog ────────────────────────────────
     @mcp.tool()
     async def browse_community_catalog(
         query: str = "",
         limit: int = 20,
-        user_id: str = "",
     ) -> str:
         """Browse publicly shared code indexes from the community catalog."""
+        # Check authentication
+        if auth_err := _auth_error():
+            return auth_err
+
         client = get_client()
-        uid = user_id or default_user_id
         try:
             resp = await client.get("/v1/scanner/community", params={
-                "username": uid,
                 "q": query,
                 "sort": "stars",
                 "limit": limit,
@@ -237,5 +240,7 @@ def register_scanner_tools(
             return "\n".join(lines)
         except httpx.HTTPStatusError as exc:
             return f"API error ({exc.response.status_code}): {exc.response.text[:200]}"
-        except Exception as exc:
-            return f"Error browsing catalog: {exc}"
+        except httpx.RequestError as exc:
+            return f"Network error connecting to XMem API: {exc}"
+        except httpx.TimeoutException as exc:
+            return f"Request timed out: {exc}"
