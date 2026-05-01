@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import contextvars
 
 import httpx
 from dotenv import load_dotenv
@@ -34,6 +35,16 @@ XMEM_API_URL = os.getenv("XMEM_API_URL", "http://localhost:8000")
 XMEM_API_KEY = os.getenv("XMEM_API_KEY", "")
 DEFAULT_USER_ID = os.getenv("DEFAULT_USER_ID", "mcp_user")
 
+# Context variable to store the current request's API key
+mcp_api_key = contextvars.ContextVar("mcp_api_key", default="")
+
+class ContextAuth(httpx.Auth):
+    """Dynamically injects the API key from the current request context."""
+    def auth_flow(self, request: httpx.Request):
+        key = mcp_api_key.get() or XMEM_API_KEY
+        if key:
+            request.headers["Authorization"] = f"Bearer {key}"
+        yield request
 
 _http_client: httpx.AsyncClient | None = None
 
@@ -42,11 +53,10 @@ def _get_client() -> httpx.AsyncClient:
     """Get the global HTTP client, creating it if needed."""
     global _http_client
     if _http_client is None:
-        headers = {"Content-Type": "application/json"}
-        if XMEM_API_KEY:
-            headers["Authorization"] = f"Bearer {XMEM_API_KEY}"
         _http_client = httpx.AsyncClient(
-            base_url=XMEM_API_URL, headers=headers, timeout=120,
+            base_url=XMEM_API_URL, 
+            timeout=120,
+            auth=ContextAuth()
         )
     return _http_client
 
@@ -232,11 +242,36 @@ register_scanner_tools(mcp, _get_client, DEFAULT_USER_ID)
 # Entry point
 # ═══════════════════════════════════════════════════════════════════════════
 
+async def run_custom_sse_async():
+    """Run the FastMCP server with custom auth middleware."""
+    import uvicorn
+    from starlette.middleware.base import BaseHTTPMiddleware
+    from starlette.requests import Request
+    
+    class AuthMiddleware(BaseHTTPMiddleware):
+        async def dispatch(self, request: Request, call_next):
+            auth_header = request.headers.get("Authorization")
+            if auth_header and auth_header.startswith("Bearer "):
+                token = auth_header[len("Bearer "):]
+                mcp_api_key.set(token)
+            return await call_next(request)
+
+    starlette_app = mcp.sse_app()
+    starlette_app.add_middleware(AuthMiddleware)
+
+    config = uvicorn.Config(
+        starlette_app,
+        host=os.getenv("HOST", "0.0.0.0"),
+        port=int(os.getenv("PORT", "8050")),
+        log_level="info",
+    )
+    server = uvicorn.Server(config)
+    await server.serve()
 
 async def main():
     transport = os.getenv("TRANSPORT", "sse")
     if transport == "sse":
-        await mcp.run_sse_async()
+        await run_custom_sse_async()
     else:
         await mcp.run_stdio_async()
 
