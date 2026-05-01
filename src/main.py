@@ -433,23 +433,17 @@ def main():
         - "stdio" — Standard input/output for local CLI usage
     """
     transport = os.getenv("TRANSPORT", "streamable-http").lower()
-    host = os.getenv("HOST", "0.0.0.0")
-    port = int(os.getenv("PORT", "8050"))
     path = os.getenv("MCP_PATH", "/mcp")
 
     if transport == "streamable-http":
+        # host/port are set in FastMCP constructor, only pass path to run()
         mcp.run(
             transport="streamable-http",
-            host=host,
-            port=port,
             path=path,
         )
     elif transport == "sse":
-        mcp.run(
-            transport="sse",
-            host=host,
-            port=port,
-        )
+        # host/port are set in FastMCP constructor
+        mcp.run(transport="sse")
     else:
         mcp.run(transport="stdio")
 
