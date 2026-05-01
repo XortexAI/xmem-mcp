@@ -8,7 +8,6 @@ in the environment or .env file.
 Environment variables:
     XMEM_API_URL     — Backend API URL (default: http://localhost:8000)
     XMEM_API_KEY     — Optional API key for authentication
-    DEFAULT_USER_ID  — Default user ID for memory operations (default: mcp_user)
     TRANSPORT        — Transport mode: "streamable-http" (default), "sse", or "stdio"
     HOST             — Server host (default: 0.0.0.0)
     PORT             — Server port (default: 8050)
@@ -44,7 +43,6 @@ from scanner_tools import register_scanner_tools
 load_dotenv()
 
 XMEM_API_URL = os.getenv("XMEM_API_URL", "http://localhost:8000")
-DEFAULT_USER_ID = os.getenv("DEFAULT_USER_ID", "mcp_user")
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Configuration Persistence for OAuth
@@ -166,7 +164,6 @@ mcp = FastMCP(
 @mcp.tool()
 async def save_memory(
     text: str,
-    user_id: str = "",
     agent_response: str = "",
 ) -> str:
     """Save information to long-term memory.
@@ -177,7 +174,6 @@ async def save_memory(
 
     Args:
         text: The user message / information to memorize
-        user_id: User identifier (defaults to server-configured default)
         agent_response: Optional assistant reply for richer summary extraction
     """
     # Check authentication
@@ -185,13 +181,11 @@ async def save_memory(
         return auth_error
 
     client = _get_client()
-    uid = user_id or DEFAULT_USER_ID
 
     try:
         resp = await client.post("/v1/memory/ingest", json={
             "user_query": text,
             "agent_response": agent_response,
-            "user_id": uid,
         })
         resp.raise_for_status()
         body = resp.json()
@@ -225,7 +219,6 @@ async def save_memory(
 @mcp.tool()
 async def search_memories(
     query: str,
-    user_id: str = "",
     top_k: int = 10,
     domains: str = "profile,temporal,summary",
 ) -> str:
@@ -236,7 +229,6 @@ async def search_memories(
 
     Args:
         query:   Natural-language search query
-        user_id: User identifier
         top_k:   Maximum results per domain
         domains: Comma-separated list of domains to search (profile, temporal, summary)
     """
@@ -245,13 +237,11 @@ async def search_memories(
         return auth_error
 
     client = _get_client()
-    uid = user_id or DEFAULT_USER_ID
     domain_list = [d.strip() for d in domains.split(",") if d.strip()]
 
     try:
         resp = await client.post("/v1/memory/search", json={
             "query": query,
-            "user_id": uid,
             "top_k": top_k,
             "domains": domain_list,
         })
@@ -282,7 +272,6 @@ async def search_memories(
 @mcp.tool()
 async def retrieve_answer(
     query: str,
-    user_id: str = "",
     top_k: int = 5,
 ) -> str:
     """Answer a question using stored memories.
@@ -292,7 +281,6 @@ async def retrieve_answer(
 
     Args:
         query:   The question to answer
-        user_id: User identifier
         top_k:   Number of source records to consider
     """
     # Check authentication
@@ -300,12 +288,10 @@ async def retrieve_answer(
         return auth_error
 
     client = _get_client()
-    uid = user_id or DEFAULT_USER_ID
 
     try:
         resp = await client.post("/v1/memory/retrieve", json={
             "query": query,
-            "user_id": uid,
             "top_k": top_k,
         })
         resp.raise_for_status()
@@ -419,7 +405,7 @@ async def authenticate(token: str) -> str:
 # ═══════════════════════════════════════════════════════════════════════════
 # Code Intelligence Tools
 # ═══════════════════════════════════════════════════════════════════════════
-register_scanner_tools(mcp, _get_client, DEFAULT_USER_ID, _check_auth)
+register_scanner_tools(mcp, _get_client, _check_auth)
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Entry point
