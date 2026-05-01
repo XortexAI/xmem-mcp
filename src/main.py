@@ -355,7 +355,7 @@ async def authenticate(token: str) -> str:
 
     try:
         resp = await client.post(
-            "/v1/auth/mcp-exchange",
+            "/auth/mcp-exchange",
             json={"temp_token": token, "client_type": "mcp"}
         )
 
