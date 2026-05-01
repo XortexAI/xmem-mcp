@@ -5,6 +5,15 @@ Uses the XMem REST API (src/api) as its backend.
 Configure XMEM_API_URL and (optionally) XMEM_API_KEY
 in the environment or .env file.
 
+Environment variables:
+    XMEM_API_URL     — Backend API URL (default: http://localhost:8000)
+    XMEM_API_KEY     — Optional API key for authentication
+    DEFAULT_USER_ID  — Default user ID for memory operations (default: mcp_user)
+    TRANSPORT        — Transport mode: "streamable-http" (default), "sse", or "stdio"
+    HOST             — Server host (default: 0.0.0.0)
+    PORT             — Server port (default: 8050)
+    MCP_PATH         — HTTP endpoint path for streamable-http (default: /mcp)
+
 Tools exposed:
     Memory:
       save_memory        — ingest a conversation turn into long-term memory
@@ -19,8 +28,12 @@ Tools exposed:
 
 from __future__ import annotations
 
-import asyncio
+import json
 import os
+from contextlib import asynccontextmanager
+from datetime import datetime
+from pathlib import Path
+from typing import AsyncIterator
 
 import httpx
 from dotenv import load_dotenv
@@ -31,8 +44,50 @@ from scanner_tools import register_scanner_tools
 load_dotenv()
 
 XMEM_API_URL = os.getenv("XMEM_API_URL", "http://localhost:8000")
-XMEM_API_KEY = os.getenv("XMEM_API_KEY", "")
 DEFAULT_USER_ID = os.getenv("DEFAULT_USER_ID", "mcp_user")
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Configuration Persistence for OAuth
+# ═══════════════════════════════════════════════════════════════════════════
+CONFIG_DIR = Path.home() / ".xmem"
+CONFIG_FILE = CONFIG_DIR / "config.json"
+
+
+def _load_stored_config() -> dict:
+    """Load stored config including cached API key from OAuth."""
+    if CONFIG_FILE.exists():
+        try:
+            return json.loads(CONFIG_FILE.read_text())
+        except (json.JSONDecodeError, IOError):
+            return {}
+    return {}
+
+
+def _save_config(config: dict) -> None:
+    """Save config to disk for persistence across restarts."""
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    CONFIG_FILE.write_text(json.dumps(config, indent=2))
+
+
+def _get_api_key() -> str | None:
+    """
+    Get API key from environment or stored config.
+    Priority: 1) Environment variable, 2) Stored config file
+    """
+    # Priority 1: Environment variable (from MCP config)
+    if env_key := os.getenv("XMEM_API_KEY"):
+        return env_key
+
+    # Priority 2: Stored config (from previous OAuth)
+    config = _load_stored_config()
+    if cached_key := config.get("api_key"):
+        return cached_key
+
+    return None
+
+
+# Initialize global API key (may be None if not configured yet)
+XMEM_API_KEY: str | None = _get_api_key()
 
 
 _http_client: httpx.AsyncClient | None = None
@@ -40,7 +95,7 @@ _http_client: httpx.AsyncClient | None = None
 
 def _get_client() -> httpx.AsyncClient:
     """Get the global HTTP client, creating it if needed."""
-    global _http_client
+    global _http_client, XMEM_API_KEY
     if _http_client is None:
         headers = {"Content-Type": "application/json"}
         if XMEM_API_KEY:
@@ -51,6 +106,45 @@ def _get_client() -> httpx.AsyncClient:
     return _http_client
 
 
+def _check_auth() -> str | None:
+    """
+    Check if API key is configured.
+    Returns error message if not authenticated, None if authenticated.
+    """
+    if not XMEM_API_KEY:
+        return (
+            "⚠️ XMem API key not configured.\n\n"
+            "Option 1 - Environment variable (recommended for local setup):\n"
+            "  Add to your MCP config:\n"
+            '  "env": {"XMEM_API_KEY": "your-api-key"}\n\n'
+            "Option 2 - OAuth (for ChatGPT, Claude UI, etc.):\n"
+            "  1. Visit https://xmem.in/auth/mcp to generate a token\n"
+            '  2. Call: authenticate(token="xm-temp-xxxxx")'
+        )
+    return None
+
+
+async def _close_client() -> None:
+    """Close the global HTTP client gracefully."""
+    global _http_client
+    if _http_client is not None:
+        await _http_client.aclose()
+        _http_client = None
+
+
+@asynccontextmanager
+async def _app_lifespan() -> AsyncIterator[None]:
+    """Manage application lifespan - cleanup on shutdown."""
+    try:
+        yield
+    finally:
+        await _close_client()
+
+
+# Get config from environment for consistent defaults
+_HOST = os.getenv("HOST", "0.0.0.0")
+_PORT = int(os.getenv("PORT", "8050"))
+
 mcp = FastMCP(
     "xmem-mcp",
     description=(
@@ -59,8 +153,8 @@ mcp = FastMCP(
         "(save, search, retrieve) and native code retrieval tools "
         "(search_symbols, impact_analysis, read_file_code, etc)."
     ),
-    host=os.getenv("HOST", "0.0.0.0"),
-    port=int(os.getenv("PORT", "8050")),
+    host=_HOST,
+    port=_PORT,
 )
 
 
@@ -86,6 +180,10 @@ async def save_memory(
         user_id: User identifier (defaults to server-configured default)
         agent_response: Optional assistant reply for richer summary extraction
     """
+    # Check authentication
+    if auth_error := _check_auth():
+        return auth_error
+
     client = _get_client()
     uid = user_id or DEFAULT_USER_ID
 
@@ -108,17 +206,20 @@ async def save_memory(
             d = data.get(domain)
             if d and d.get("operations"):
                 ops = d["operations"]
+                conf = d.get("confidence") or 0
                 parts.append(
                     f"  {domain}: {len(ops)} ops, "
-                    f"confidence={d.get('confidence', 0):.1%}"
+                    f"confidence={conf:.1%}"
                 )
 
         return "\n".join(parts)
 
     except httpx.HTTPStatusError as exc:
         return f"API error ({exc.response.status_code}): {exc.response.text[:200]}"
-    except Exception as exc:
-        return f"Error saving memory: {exc}"
+    except httpx.RequestError as exc:
+        return f"Network error connecting to XMem API: {exc}"
+    except httpx.TimeoutException as exc:
+        return f"Request timed out after 120s: {exc}"
 
 
 @mcp.tool()
@@ -139,6 +240,10 @@ async def search_memories(
         top_k:   Maximum results per domain
         domains: Comma-separated list of domains to search (profile, temporal, summary)
     """
+    # Check authentication
+    if auth_error := _check_auth():
+        return auth_error
+
     client = _get_client()
     uid = user_id or DEFAULT_USER_ID
     domain_list = [d.strip() for d in domains.split(",") if d.strip()]
@@ -168,8 +273,10 @@ async def search_memories(
 
     except httpx.HTTPStatusError as exc:
         return f"API error ({exc.response.status_code}): {exc.response.text[:200]}"
-    except Exception as exc:
-        return f"Error searching memories: {exc}"
+    except httpx.RequestError as exc:
+        return f"Network error connecting to XMem API: {exc}"
+    except httpx.TimeoutException as exc:
+        return f"Request timed out after 120s: {exc}"
 
 
 @mcp.tool()
@@ -188,6 +295,10 @@ async def retrieve_answer(
         user_id: User identifier
         top_k:   Number of source records to consider
     """
+    # Check authentication
+    if auth_error := _check_auth():
+        return auth_error
+
     client = _get_client()
     uid = user_id or DEFAULT_USER_ID
 
@@ -217,29 +328,131 @@ async def retrieve_answer(
 
     except httpx.HTTPStatusError as exc:
         return f"API error ({exc.response.status_code}): {exc.response.text[:200]}"
+    except httpx.RequestError as exc:
+        return f"Network error connecting to XMem API: {exc}"
+    except httpx.TimeoutException as exc:
+        return f"Request timed out after 120s: {exc}"
+
+
+@mcp.tool()
+async def authenticate(token: str) -> str:
+    """
+    Exchange temporary OAuth token for a permanent API key.
+
+    Use this when connecting from ChatGPT, Claude UI, or other clients
+    where you cannot set environment variables.
+
+    Steps:
+    1. Visit https://xmem.in/auth/mcp while logged into your account
+    2. Copy the temporary token (expires in 10 minutes)
+    3. Call this tool with the token
+
+    The API key will be cached to ~/.xmem/config.json for future sessions.
+
+    Args:
+        token: Temporary token from https://xmem.in/auth/mcp
+    """
+    global XMEM_API_KEY, _http_client
+
+    # Create fresh client without auth for this exchange
+    client = httpx.AsyncClient(base_url=XMEM_API_URL, timeout=30)
+
+    try:
+        resp = await client.post(
+            "/v1/auth/mcp-exchange",
+            json={"temp_token": token, "client_type": "mcp"}
+        )
+
+        if resp.status_code == 401:
+            return (
+                "❌ Invalid or expired token.\n\n"
+                "The token may have expired (valid for 10 minutes).\n"
+                "Please visit https://xmem.in/auth/mcp to generate a new token."
+            )
+
+        resp.raise_for_status()
+        data = resp.json()
+
+        if data.get("status") == "error":
+            return f"❌ Authentication failed: {data.get('error', 'Unknown error')}"
+
+        new_api_key = data.get("api_key")
+        user_info = data.get("user", {})
+
+        if not new_api_key:
+            return "❌ Authentication failed: No API key received from server"
+
+        # Store for persistence
+        config = {
+            "api_key": new_api_key,
+            "user_id": user_info.get("id"),
+            "email": user_info.get("email"),
+            "cached_at": datetime.now().isoformat(),
+        }
+        _save_config(config)
+
+        # Update global API key
+        XMEM_API_KEY = new_api_key
+
+        # Reset HTTP client to use new API key
+        if _http_client is not None:
+            await _http_client.aclose()
+            _http_client = None
+
+        return (
+            f"✅ Authentication successful!\n"
+            f"User: {user_info.get('email', user_info.get('id', 'Unknown'))}\n"
+            f"API key cached to ~/.xmem/config.json\n\n"
+            f"You can now use all XMem memory tools."
+        )
+
+    except httpx.RequestError as exc:
+        return f"❌ Network error connecting to XMem API: {exc}"
+    except httpx.TimeoutException:
+        return "❌ Request timed out. Please try again."
     except Exception as exc:
-        return f"Error retrieving answer: {exc}"
+        return f"❌ Unexpected error during authentication: {exc}"
+    finally:
+        await client.aclose()
 
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Code Intelligence Tools
 # ═══════════════════════════════════════════════════════════════════════════
-
-register_scanner_tools(mcp, _get_client, DEFAULT_USER_ID)
-
+register_scanner_tools(mcp, _get_client, DEFAULT_USER_ID, _check_auth)
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Entry point
 # ═══════════════════════════════════════════════════════════════════════════
+def main():
+    """Run the MCP server with the configured transport.
+    
+    Set TRANSPORT env var to one of:
+        - "streamable-http" (default, recommended) — HTTP POST-based streaming
+        - "sse" — Server-Sent Events (legacy)
+        - "stdio" — Standard input/output for local CLI usage
+    """
+    transport = os.getenv("TRANSPORT", "streamable-http").lower()
+    host = os.getenv("HOST", "0.0.0.0")
+    port = int(os.getenv("PORT", "8050"))
+    path = os.getenv("MCP_PATH", "/mcp")
 
-
-async def main():
-    transport = os.getenv("TRANSPORT", "sse")
-    if transport == "sse":
-        await mcp.run_sse_async()
+    if transport == "streamable-http":
+        mcp.run(
+            transport="streamable-http",
+            host=host,
+            port=port,
+            path=path,
+        )
+    elif transport == "sse":
+        mcp.run(
+            transport="sse",
+            host=host,
+            port=port,
+        )
     else:
-        await mcp.run_stdio_async()
+        mcp.run(transport="stdio")
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
